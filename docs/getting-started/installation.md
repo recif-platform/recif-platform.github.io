@@ -11,151 +11,133 @@ Deploy Récif on a local Kubernetes cluster in minutes.
 | Tool | Purpose | Install |
 |------|---------|---------|
 | [Docker](https://docs.docker.com/get-docker/) | Container runtime | `brew install docker` |
-| [Colima](https://github.com/abiosoft/colima) | Local Docker VM (macOS) | `brew install colima` |
-| [Kind](https://kind.sigs.k8s.io/) | Local K8s cluster | `brew install kind` |
+| [Colima](https://github.com/abiosoft/colima) | Local Docker + K8s (macOS) | `brew install colima` |
 | [kubectl](https://kubernetes.io/docs/tasks/tools/) | K8s CLI | `brew install kubectl` |
 | [Helm](https://helm.sh/docs/intro/install/) | K8s package manager | `brew install helm` |
+| [istioctl](https://istio.io/latest/docs/setup/getting-started/) | Service mesh (for canary) | `brew install istioctl` |
 
-## Quick start
+## 1. Start the cluster
 
 ```bash
-git clone https://github.com/recif-platform/recif.git
-cd recif
-
-# Start Docker runtime
-colima start --cpu 4 --memory 8 --disk 60
-
-# Run the setup (builds images, creates cluster, installs Helm chart)
-bash deploy/kind/setup.sh
+colima start --cpu 4 --memory 8 --disk 60 --kubernetes
 ```
 
-## Step-by-step (manual)
-
-If you prefer to understand each step:
-
-### 1. Start Docker and create the cluster
+Verify:
 
 ```bash
-colima start --cpu 4 --memory 8 --disk 60
-
-kind create cluster --config deploy/kind/kind-config.yaml
+kubectl get nodes
+# NAME     STATUS   ROLES           AGE   VERSION
+# colima   Ready    control-plane   10s   v1.35.0+k3s1
 ```
 
-### 2. Build the platform images
+## 2. Build the platform images
 
 ```bash
-# API server (Go + Marée Python sidecar)
+# From the repo root:
 docker build -t ghcr.io/recif-platform/recif-api:latest -f recif/Dockerfile .
-
-# Dashboard (Next.js)
-docker build -t ghcr.io/recif-platform/recif-dashboard:latest -f recif/dashboard/Dockerfile recif/dashboard
-
-# Operator (Go)
-docker build -t ghcr.io/recif-platform/recif-operator:latest -f recif-operator/Dockerfile recif-operator
-
-# Corail agent runtime (Python)
-docker build -t ghcr.io/recif-platform/corail:latest -f corail/Dockerfile corail
+docker build -t ghcr.io/recif-platform/recif-operator:latest -f recif-operator/Dockerfile recif-operator/
+docker build -t ghcr.io/recif-platform/recif-dashboard:latest -f recif/dashboard/Dockerfile recif/dashboard/
+docker build -t ghcr.io/recif-platform/corail:latest -f corail/Dockerfile corail/
 ```
 
-### 3. Load images into Kind
-
-Kind runs K8s inside Docker containers — images must be loaded explicitly:
+## 3. Install with Helm
 
 ```bash
-for img in recif-api recif-dashboard recif-operator corail; do
-  kind load docker-image "ghcr.io/recif-platform/${img}:latest" --name recif
-done
-
-# Also load the PostgreSQL image to avoid slow in-cluster pulls
-docker pull pgvector/pgvector:pg16
-kind load docker-image pgvector/pgvector:pg16 --name recif
+helm install recif deploy/helm/recif/ \
+  --namespace recif-system --create-namespace \
+  --set global.imagePullPolicy=Never
 ```
 
-### 4. Create namespaces and install Helm chart
-
-```bash
-kubectl create namespace recif-system
-kubectl create namespace team-default
-
-helm upgrade --install recif deploy/helm/recif \
-  --namespace recif-system \
-  --set ingress.enabled=false
-```
-
-### 5. Wait for pods
+Wait for pods:
 
 ```bash
 kubectl get pods -n recif-system -w
 ```
 
-Expected output (after 1-2 minutes):
+Expected (after 1-2 minutes):
 
 ```
-NAME                               READY   STATUS    AGE
-recif-api-...                      1/1     Running   60s
-recif-dashboard-...                1/1     Running   60s
-recif-operator-...                 1/1     Running   60s
-recif-postgresql-0                 1/1     Running   60s
+recif-api-...          1/1   Running
+recif-dashboard-...    1/1   Running
+recif-operator-...     1/1   Running
+recif-postgresql-0     1/1   Running
 ```
 
-### 6. Access the platform
+## 4. Install Istio + Kiali (local dev)
+
+Istio enables canary deployments and the Kiali service mesh dashboard. For local development, install it with the provided script:
 
 ```bash
-kubectl port-forward svc/recif-api 8080:8080 -n recif-system &
-kubectl port-forward svc/recif-dashboard 3000:3000 -n recif-system &
-kubectl port-forward svc/recif-postgresql 5433:5432 -n recif-system &
+bash deploy/scripts/setup-istio.sh
 ```
 
-- **Dashboard**: http://localhost:3000
-- **API**: http://localhost:8080
-- **PostgreSQL**: `localhost:5433` (user: `recif`, password: `recif_dev`)
+This installs Istio (demo profile), Kiali, Prometheus, and enables sidecar injection on the `team-default` namespace.
 
-## Configure an LLM provider
+> **Production note**: In production, Istio is typically already installed by your ops team. Récif detects Istio automatically and enables canary features when the mesh is present. If Istio is not yet installed in your production cluster, install it separately following the [official Istio docs](https://istio.io/latest/docs/setup/install/) — do not use the demo profile in production. Then simply deploy Récif; it will detect the mesh and work with it.
 
-By default agents use `stub` mode (echo). Connect a real LLM:
+## 5. Access the platform
+
+```bash
+kubectl port-forward -n recif-system svc/recif-api 8080:8080 &
+kubectl port-forward -n recif-system svc/recif-dashboard 3000:3000 &
+kubectl port-forward -n mlflow-system svc/mlflow 5000:5000 &
+kubectl port-forward -n istio-system svc/kiali 20001:20001 &
+```
+
+| Service | URL |
+|---------|-----|
+| Dashboard | http://localhost:3000 |
+| API | http://localhost:8080 |
+| MLflow | http://localhost:5000 |
+| Kiali | http://localhost:20001 |
+
+## 6. Configure an LLM provider
+
+By default, agents use `stub` mode (echo). Connect a real LLM:
+
+### Local models (Ollama)
+
+If you have Ollama running locally:
+
+```bash
+helm upgrade recif deploy/helm/recif/ -n recif-system \
+  --set ollama.baseUrl=http://host.docker.internal:11434 \
+  --reuse-values
+```
 
 ### API key providers (OpenAI, Anthropic, Google AI)
 
 ```bash
-# Example: OpenAI
-kubectl create secret generic agent-env \
-  -n team-default \
-  --from-literal=OPENAI_API_KEY=sk-...
+# Create a secret values file (gitignored)
+cp deploy/helm/values-secret.yaml.example deploy/helm/values-secret.yaml
+# Edit with your keys, then:
+helm upgrade recif deploy/helm/recif/ -n recif-system \
+  -f deploy/helm/values-secret.yaml --reuse-values
 ```
 
-### Vertex AI (Google Cloud — service account)
+See [LLM Providers](../corail/llm-providers.md) for all 7 providers and detailed setup.
+See [Secret Management](../recif/secret-management.md) for production secret strategies (Vault, GCP SM, Workload Identity).
+
+## 7. Verify
 
 ```bash
-# 1. Create the secret with your service account key
-kubectl create secret generic <agent-name>-gcp-sa \
-  -n team-default \
-  --from-file=credentials.json=sa-key.json
-
-# 2. Create the agent with modelType: vertex-ai in the dashboard
-#    The operator auto-mounts the credentials
-```
-
-See [LLM Providers](../corail/llm-providers.md) for all providers and detailed setup.
-
-## Verify
-
-```bash
-# Check CRDs are installed
+# CRDs installed
 kubectl get crd agents.agents.recif.dev
 
-# Check namespaces
-kubectl get ns | grep -E "recif-system|team-default"
+# Namespaces
+kubectl get ns | grep -E "recif|team|mlflow|istio"
 
-# List agents (should be empty initially)
-kubectl get agents -n team-default
-
-# Test the API
+# API healthy
 curl http://localhost:8080/healthz
+
+# Create your first agent (via dashboard or API)
+curl -X POST http://localhost:8080/api/v1/agents \
+  -H "Content-Type: application/json" \
+  -d '{"name":"my-agent","framework":"corail","modelType":"stub","modelId":"stub-echo","channel":"rest","version":"0.1.0"}'
 ```
 
 ## Teardown
 
 ```bash
-kind delete cluster --name recif
-colima stop
+colima delete --force
 ```
