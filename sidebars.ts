@@ -44,6 +44,8 @@ const sidebars: SidebarsConfig = {
         'recif/api',
         'recif/operator',
         'recif/helm',
+        'recif/authentication',
+        'recif/teams',
         'recif/agent-settings',
         'recif/secret-management',
         'recif/evaluation',
