@@ -59,6 +59,7 @@ const sidebars: SidebarsConfig = {
         'maree/pipeline',
       ],
     },
+    'contributing',
   ],
 };
 

@@ -111,17 +111,46 @@ When either `enabled: true` or `baseUrl` is set, the chart injects `OLLAMA_BASE_
 
 If your chat agents run large local models (35B+) **and** you also set a `backgroundModel` on them, bump Ollama's `OLLAMA_MAX_LOADED_MODELS` to `2` so it can keep the chat model and the background model resident at the same time. See [Agent Settings → Background model](./agent-settings.md#background-model) for details.
 
-### Authentication
+### Knowledge Bases (corail_storage)
 
-```yaml
-auth:
-  enabled: false               # Set to true in production
-  provider: "oidc"             # oidc | aws-iam | gcp-identity
-  issuer: ""
-  jwksUri: ""
+Knowledge base ingestion requires a second PostgreSQL database called `corail_storage`. The Helm chart automatically derives `KB_DATABASE_URL` from the main PostgreSQL credentials, pointing to the `corail_storage` database.
+
+The database is created automatically if the PostgreSQL instance is managed by the chart. For external databases, create the `corail_storage` database manually:
+
+```sql
+CREATE DATABASE corail_storage;
 ```
 
-When enabled, the Récif API validates JWT tokens on all `/api/v1` endpoints.
+To override the KB database URL explicitly:
+
+```yaml
+api:
+  env:
+    KB_DATABASE_URL: "postgres://user:pass@host:5432/corail_storage?sslmode=disable"
+```
+
+The KB schema (tables `knowledge_bases`, `kb_documents`, `chunks` with pgvector) is migrated automatically on API startup.
+
+### Authentication
+
+See the dedicated [Authentication](/docs/recif/authentication) page for full setup.
+
+```yaml
+api:
+  env:
+    AUTH_ENABLED: "true"    # Require JWT on all API calls
+```
+
+Create the admin credentials secret before deploying:
+
+```bash
+kubectl create secret generic recif-api-secrets \
+  --from-literal=JWT_SECRET="$(openssl rand -base64 32)" \
+  --from-literal=ADMIN_EMAIL="you@example.com" \
+  --from-literal=ADMIN_PASSWORD="your-password" \
+  --from-literal=ADMIN_NAME="Your Name" \
+  -n recif-system
+```
 
 ### Observability
 

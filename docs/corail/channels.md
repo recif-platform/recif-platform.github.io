@@ -139,6 +139,27 @@ Replace the value with your Discord server (guild) ID. Commands will appear inst
 | "DISCORD_BOT_TOKEN env var not set" | Secret not mounted | Verify `envSecrets` includes `discord-bot` in the Agent CRD |
 | Response truncated | Discord 2000 char limit | Agent is told to keep responses concise; long answers are clipped |
 
+### Feedback Reactions
+
+After each response, the bot automatically adds 👍 and 👎 reaction buttons. When a user clicks one:
+
+1. The reaction is captured via Discord's `on_raw_reaction_add` event.
+2. The feedback is logged to **MLflow** as a `user_rating` assessment on the conversation trace.
+3. You can view feedback scores in the MLflow UI under the agent's experiment.
+
+This works automatically — no configuration needed. The feedback is tied to the MLflow trace ID of the conversation that produced the response.
+
+### MLflow Tracing
+
+All Discord conversations are traced in MLflow. Each message exchange (user input → agent response) is recorded as a span with:
+
+- Input/output text
+- Conversation ID
+- Channel name (`discord`)
+- Tool calls and RAG sources (if any)
+
+Tracing also works for the **dashboard chat** (via ControlServer) and **REST API** channel. This means all three channels produce consistent traces in MLflow regardless of how the user interacts with the agent.
+
 ## Adding a new channel
 
 Channels follow the registry pattern. To add a new channel (e.g. Slack, Telegram):
